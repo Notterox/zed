@@ -1,9 +1,9 @@
 use crate::scroll::ScrollAmount;
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    Action, AnyElement, Entity, Focusable, FontWeight, HighlightStyle, ListSizingBehavior,
-    ScrollHandle, ScrollStrategy, SharedString, Size, StrikethroughStyle, StyledText, Task,
-    TaskExt, UniformListScrollHandle, div, px, uniform_list,
+    AnyElement, Entity, Focusable, FontWeight, HighlightStyle, ListSizingBehavior, ScrollHandle,
+    ScrollStrategy, SharedString, Size, StrikethroughStyle, StyledText, Task, TaskExt,
+    UniformListScrollHandle, div, px, uniform_list,
 };
 use itertools::Itertools;
 use language::CodeLabel;
@@ -34,12 +34,19 @@ use ui::{
 };
 use util::ResultExt;
 
+use crate::CodeActionsMenuRows; // NOTTEROX
 use crate::hover_popover::{hover_markdown_style, open_markdown_url};
 use crate::{
-    CodeActionProvider, CompletionId, CompletionProvider, DisplayRow, Editor, EditorStyle,
+    CodeActionProvider,
+    CompletionId,
+    CompletionProvider,
+    DisplayRow,
+    Editor,
+    EditorStyle,
     ResolvedTasks,
-    actions::{ConfirmCodeAction, ConfirmCompletion},
-    split_words, styled_runs_for_code_label,
+    actions::ConfirmCompletion, // NOTTEROX: ConfirmCodeAction moved to code_actions_menu_rows.rs
+    split_words,
+    styled_runs_for_code_label,
 };
 use crate::{CodeActionSource, EditorSettings};
 use collections::{HashSet, VecDeque};
@@ -1885,7 +1892,8 @@ impl CodeActionContents {
         self.len() == 0
     }
 
-    fn iter(&self) -> impl Iterator<Item = CodeActionsItem> + '_ {
+    // NOTTEROX: pub(crate) for code_actions_menu_rows.rs.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = CodeActionsItem> + '_ {
         self.tasks
             .iter()
             .flat_map(|tasks| {
@@ -1962,370 +1970,46 @@ impl CodeActionsItem {
     }
 }
 
-/// Sections of the code actions menu, in display order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum CodeActionsGroup {
-    QuickFix,
-    Refactor,
-    Extract,
-    Inline,
-    Source,
-    Navigate,
-    Run,
-    Debug,
-    Other,
-}
-
-impl CodeActionsGroup {
-    fn for_item(item: &CodeActionsItem) -> Self {
-        match item {
-            CodeActionsItem::Task(..) => Self::Run,
-            CodeActionsItem::DebugScenario(_) => Self::Debug,
-            CodeActionsItem::CodeAction { action, .. } => {
-                let kind = action.lsp_action.action_kind();
-                match kind.as_ref().map(|kind| kind.as_str()) {
-                    Some(kind) if kind.starts_with("quickfix") => Self::QuickFix,
-                    Some(kind) if kind.starts_with("refactor.extract") => Self::Extract,
-                    Some(kind) if kind.starts_with("refactor.inline") => Self::Inline,
-                    Some(kind) if kind.starts_with("refactor") => Self::Refactor,
-                    Some(kind) if kind.starts_with("source") => Self::Source,
-                    _ => Self::Other,
-                }
-            }
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::QuickFix => "Quick Fixes",
-            Self::Refactor => "Refactor",
-            Self::Extract => "Extract",
-            Self::Inline => "Inline",
-            Self::Source => "Source",
-            Self::Navigate => "Navigate",
-            Self::Run => "Run",
-            Self::Debug => "Debug",
-            Self::Other => "Other",
-        }
-    }
-}
-
-/// An editor command listed in the code actions menu next to the language server's actions.
-pub(crate) struct CodeActionsMenuCommand {
-    label: SharedString,
-    group: CodeActionsGroup,
-    action: Box<dyn Action>,
-}
-
-impl CodeActionsMenuCommand {
-    /// The editor's rename, navigation and source commands, shown when the menu is opened at the
-    /// cursor.
-    pub(crate) fn defaults() -> Vec<Self> {
-        use crate::actions::{
-            FindAllReferences, Format, GoToImplementation, GoToTypeDefinition, OrganizeImports,
-            Rename,
-        };
-        let command = |label: &'static str, group, action: Box<dyn Action>| Self {
-            label: label.into(),
-            group,
-            action,
-        };
-        vec![
-            command("Rename…", CodeActionsGroup::Refactor, Box::new(Rename)),
-            command(
-                "Find All References",
-                CodeActionsGroup::Navigate,
-                Box::new(FindAllReferences::default()),
-            ),
-            command(
-                "Go to Implementation",
-                CodeActionsGroup::Navigate,
-                Box::new(GoToImplementation::default()),
-            ),
-            command(
-                "Go to Type Definition",
-                CodeActionsGroup::Navigate,
-                Box::new(GoToTypeDefinition::default()),
-            ),
-            command(
-                "Show Incoming Calls",
-                CodeActionsGroup::Navigate,
-                Box::new(zed_actions::ShowIncomingCalls),
-            ),
-            command(
-                "Organize Imports",
-                CodeActionsGroup::Source,
-                Box::new(OrganizeImports),
-            ),
-            command(
-                "Format Document",
-                CodeActionsGroup::Source,
-                Box::new(Format),
-            ),
-        ]
-    }
-}
-
-/// What a code actions menu row runs: an index into [`CodeActionContents`] or into the menu's
-/// editor commands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CodeActionsMenuTarget {
-    Action(usize),
-    Command(usize),
-}
-
-#[derive(Clone)]
-enum CodeActionsMenuEntry {
-    Header(CodeActionsGroup),
-    Item {
-        target: CodeActionsMenuTarget,
-        label: SharedString,
-        /// Byte offsets of the characters matching the search query.
-        positions: Vec<usize>,
-    },
-}
-
 pub struct CodeActionsMenu {
     pub actions: CodeActionContents,
     pub buffer: Entity<Buffer>,
-    /// Index into the menu's rows, which include group headers.
     pub selected_item: usize,
     pub scroll_handle: UniformListScrollHandle,
     pub deployed_from: Option<CodeActionSource>,
-    commands: Vec<CodeActionsMenuCommand>,
-    /// Text typed while the menu is open; filters the rows.
-    query: String,
-    /// One candidate per command, then one per action; ids index `targets`.
-    candidates: Vec<fuzzy_nucleo::StringMatchCandidate>,
-    targets: Vec<(CodeActionsMenuTarget, CodeActionsGroup)>,
-    entries: Rc<[CodeActionsMenuEntry]>,
-    pub(crate) _keystroke_interceptor: Option<gpui::Subscription>,
+    // NOTTEROX: grouped, searchable rows; `selected_item` indexes them, headers included.
+    pub(crate) rows: CodeActionsMenuRows,
+    pub(crate) _search: Option<gpui::Subscription>,
 }
 
 impl CodeActionsMenu {
-    pub(crate) fn new(
-        actions: CodeActionContents,
-        commands: Vec<CodeActionsMenuCommand>,
-        buffer: Entity<Buffer>,
-        deployed_from: Option<CodeActionSource>,
-    ) -> Self {
-        let commands_iter = commands.iter().enumerate().map(|(ix, command)| {
-            (
-                CodeActionsMenuTarget::Command(ix),
-                command.group,
-                command.label.to_string(),
-            )
-        });
-        let actions_iter = actions.iter().enumerate().map(|(ix, item)| {
-            (
-                CodeActionsMenuTarget::Action(ix),
-                CodeActionsGroup::for_item(&item),
-                item.menu_label(),
-            )
-        });
-        let mut targets = Vec::new();
-        let mut candidates = Vec::new();
-        for (id, (target, group, label)) in commands_iter.chain(actions_iter).enumerate() {
-            targets.push((target, group));
-            candidates.push(fuzzy_nucleo::StringMatchCandidate::new(id, label));
-        }
-
-        let mut menu = Self {
-            actions,
-            buffer,
-            selected_item: 0,
-            scroll_handle: UniformListScrollHandle::default(),
-            deployed_from,
-            commands,
-            query: String::new(),
-            candidates,
-            targets,
-            entries: Rc::from(Vec::new()),
-            _keystroke_interceptor: None,
-        };
-        menu.filter();
-        menu
-    }
-
-    /// Rebuilds the rows from the search query. Matching runs synchronously: the menu holds
-    /// a handful of rows, and filtering on the keystroke avoids a frame of stale rows.
-    fn filter(&mut self) {
-        let matches = fuzzy_nucleo::match_strings(
-            &self.candidates,
-            &self.query,
-            fuzzy_nucleo::Case::Ignore,
-            fuzzy_nucleo::LengthPenalty::On,
-            self.candidates.len(),
-        );
-        self.set_matches(matches);
-    }
-
-    /// Replaces the rows with `matches` (best first), grouped by section. Headers are shown
-    /// only when more than one section has rows.
-    fn set_matches(&mut self, mut matches: Vec<fuzzy_nucleo::StringMatch>) {
-        matches.sort_by_key(|mat| self.targets[mat.candidate_id].1);
-        let show_headers = matches
-            .iter()
-            .map(|mat| self.targets[mat.candidate_id].1)
-            .dedup()
-            .nth(1)
-            .is_some();
-
-        let mut entries = Vec::with_capacity(matches.len());
-        let mut last_group = None;
-        for mat in matches {
-            let (target, group) = self.targets[mat.candidate_id];
-            if show_headers && last_group != Some(group) {
-                entries.push(CodeActionsMenuEntry::Header(group));
-                last_group = Some(group);
-            }
-            entries.push(CodeActionsMenuEntry::Item {
-                target,
-                label: mat.string,
-                positions: mat.positions,
-            });
-        }
-        self.entries = entries.into();
-
-        let forward = !self.scroll_handle.y_flipped();
-        let start = if forward {
-            0
-        } else {
-            self.entries.len().saturating_sub(1)
-        };
-        self.selected_item = self.find_selectable_entry(start, forward).unwrap_or(0);
-        self.scroll_handle
-            .scroll_to_item(self.selected_item, ScrollStrategy::Top);
-    }
-
-    /// Applies a keystroke typed while the menu is open to the search query and refilters the
-    /// rows. Returns false for keystrokes that aren't search input, which then go through
-    /// normal key dispatch.
-    pub(crate) fn handle_search_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
-        let modifiers = &keystroke.modifiers;
-        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
-            return false;
-        }
-        if keystroke.key == "backspace" {
-            if self.query.pop().is_none() {
-                return false;
-            }
-        } else {
-            match &keystroke.key_char {
-                Some(text)
-                    if !text.is_empty()
-                        && !text.chars().any(char::is_control)
-                        // Leave a leading space to key bindings such as a space leader.
-                        && !(self.query.is_empty() && text.trim().is_empty()) =>
-                {
-                    self.query.push_str(text);
-                }
-                _ => return false,
-            }
-        }
-        self.filter();
-        true
-    }
-
-    pub(crate) fn selected_target(&self) -> Option<CodeActionsMenuTarget> {
-        match self.entries.get(self.selected_item)? {
-            CodeActionsMenuEntry::Item { target, .. } => Some(*target),
-            CodeActionsMenuEntry::Header(_) => None,
-        }
-    }
-
-    /// The rows as text, headers as `# Header`, the selected row prefixed with `> `.
-    #[cfg(test)]
-    pub(crate) fn row_labels(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .enumerate()
-            .map(|(ix, entry)| {
-                let selected = if ix == self.selected_item { "> " } else { "" };
-                match entry {
-                    CodeActionsMenuEntry::Header(group) => format!("# {}", group.label()),
-                    CodeActionsMenuEntry::Item { label, .. } => format!("{selected}{label}"),
-                }
-            })
-            .collect()
-    }
-
-    pub(crate) fn command_action(&self, ix: usize) -> Option<Box<dyn Action>> {
-        Some(self.commands.get(ix)?.action.boxed_clone())
-    }
-
-    fn find_selectable_entry(&self, start: usize, forward: bool) -> Option<usize> {
-        let len = self.entries.len();
-        let mut index = start;
-        for _ in 0..len {
-            if matches!(
-                self.entries.get(index),
-                Some(CodeActionsMenuEntry::Item { .. })
-            ) {
-                return Some(index);
-            }
-            index = if forward {
-                (index + 1) % len
-            } else {
-                (index + len - 1) % len
-            };
-        }
-        None
-    }
-
-    fn select_entry(&mut self, ix: Option<usize>, cx: &mut Context<Editor>) {
-        if let Some(ix) = ix {
-            self.selected_item = ix;
-            self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
-            cx.notify();
-        }
-    }
-
+    // NOTTEROX: selection moves over the rows, skipping group headers.
     fn select_first(&mut self, cx: &mut Context<Editor>) {
-        let ix = if self.scroll_handle.y_flipped() {
-            self.find_selectable_entry(self.entries.len().saturating_sub(1), false)
-        } else {
-            self.find_selectable_entry(0, true)
-        };
-        self.select_entry(ix, cx);
+        let ix = self.rows.first(self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_last(&mut self, cx: &mut Context<Editor>) {
-        let ix = if self.scroll_handle.y_flipped() {
-            self.find_selectable_entry(0, true)
-        } else {
-            self.find_selectable_entry(self.entries.len().saturating_sub(1), false)
-        };
-        self.select_entry(ix, cx);
+        let ix = self.rows.first(!self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_prev(&mut self, cx: &mut Context<Editor>) {
-        let forward = self.scroll_handle.y_flipped();
-        let ix = self.step_index(forward);
-        self.select_entry(ix, cx);
+        let ix = self
+            .rows
+            .step(self.selected_item, self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_next(&mut self, cx: &mut Context<Editor>) {
-        let forward = !self.scroll_handle.y_flipped();
-        let ix = self.step_index(forward);
-        self.select_entry(ix, cx);
-    }
-
-    fn step_index(&self, forward: bool) -> Option<usize> {
-        let len = self.entries.len();
-        if len == 0 {
-            return None;
-        }
-        let start = if forward {
-            (self.selected_item + 1) % len
-        } else {
-            (self.selected_item + len - 1) % len
-        };
-        self.find_selectable_entry(start, forward)
+        let ix = self
+            .rows
+            .step(self.selected_item, !self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     pub fn visible(&self) -> bool {
-        !self.targets.is_empty()
+        // NOTTEROX: editor command rows count too.
+        self.rows.has_targets()
     }
 
     fn origin(&self) -> ContextMenuOrigin {
@@ -2345,70 +2029,21 @@ impl CodeActionsMenu {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) -> AnyElement {
-        let entries = self.entries.clone();
+        // NOTTEROX: render the grouped, searchable rows (code_actions_menu_rows.rs).
+        let rows = self.rows.rows();
         let selected_item = self.selected_item;
         let is_quick_action_bar = matches!(self.origin(), ContextMenuOrigin::QuickActionBar);
 
         let list = uniform_list(
             "code_actions_menu",
-            self.entries.len(),
+            self.rows.len(),
             cx.processor(move |_this, range: Range<usize>, _, cx| {
                 let start_ix = range.start;
-                entries[range]
+                rows[range]
                     .iter()
                     .enumerate()
-                    .map(|(ix, entry)| {
-                        let entry_ix = start_ix + ix;
-                        let (label, positions) = match entry {
-                            CodeActionsMenuEntry::Header(group) => {
-                                return div()
-                                    .child(ListSubHeader::new(group.label()).inset(true))
-                                    .into_any_element();
-                            }
-                            CodeActionsMenuEntry::Item {
-                                label, positions, ..
-                            } => (label, positions),
-                        };
-                        let selected = entry_ix == selected_item;
-                        let colors = cx.theme().colors();
-                        let match_highlights = positions.iter().map(|&start| {
-                            let len = label[start..].chars().next().map_or(0, char::len_utf8);
-                            (start..start + len, HighlightStyle::from(FontWeight::BOLD))
-                        });
-
-                        ListItem::new(entry_ix)
-                            .inset(true)
-                            .toggle_state(selected)
-                            .overflow_x()
-                            .child(
-                                div()
-                                    .min_w(CODE_ACTION_MENU_MIN_WIDTH)
-                                    .max_w(CODE_ACTION_MENU_MAX_WIDTH)
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .when(is_quick_action_bar, |this| this.text_ui(cx))
-                                    .when(selected, |this| this.text_color(colors.text_accent))
-                                    .child(
-                                        StyledText::new(label.clone())
-                                            .with_highlights(match_highlights),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |editor, _, window, cx| {
-                                cx.stop_propagation();
-                                if let Some(CodeContextMenu::CodeActions(menu)) =
-                                    editor.context_menu.borrow_mut().as_mut()
-                                {
-                                    menu.selected_item = entry_ix;
-                                }
-                                if let Some(task) = editor.confirm_code_action(
-                                    &ConfirmCodeAction { item_ix: None },
-                                    window,
-                                    cx,
-                                ) {
-                                    task.detach_and_log_err(cx)
-                                }
-                            }))
-                            .into_any_element()
+                    .map(|(ix, row)| {
+                        row.render(start_ix + ix, selected_item, is_quick_action_bar, cx)
                     })
                     .collect()
             }),
@@ -2416,40 +2051,11 @@ impl CodeActionsMenu {
         .occlude()
         .max_h(max_height_in_lines as f32 * window.line_height())
         .track_scroll(&self.scroll_handle)
-        .with_width_from_item(
-            self.entries
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, entry)| match entry {
-                    CodeActionsMenuEntry::Item { label, .. } => label.chars().count(),
-                    CodeActionsMenuEntry::Header(group) => group.label().chars().count(),
-                })
-                .map(|(ix, _)| ix),
-        )
+        .with_width_from_item(self.rows.widest_row())
         .with_sizing_behavior(ListSizingBehavior::Infer);
 
-        let search = (!self.query.is_empty()).then(|| {
-            h_flex()
-                .px_2()
-                .py_0p5()
-                .gap_1()
-                .child(
-                    Icon::new(IconName::MagnifyingGlass)
-                        .size(IconSize::Small)
-                        .color(Color::Muted),
-                )
-                .child(Label::new(self.query.clone()).size(LabelSize::Small))
-        });
-        let no_matches = self.entries.is_empty().then(|| {
-            div().px_2().py_0p5().child(
-                Label::new("No matching actions")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-        });
-
         Popover::new()
-            .child(v_flex().children(search).children(no_matches).child(list))
+            .child(v_flex().children(self.rows.render_status()).child(list))
             .into_any_element()
     }
 
@@ -2459,10 +2065,9 @@ impl CodeActionsMenu {
         window: &mut Window,
         _cx: &mut Context<Editor>,
     ) -> Option<AnyElement> {
-        let label = match self.selected_target()? {
-            CodeActionsMenuTarget::Action(ix) => self.actions.get(ix)?.menu_label(),
-            CodeActionsMenuTarget::Command(ix) => self.commands.get(ix)?.label.to_string(),
-        };
+        // NOTTEROX: the selected row can be an editor command.
+        let target = self.rows.target(self.selected_item)?;
+        let label = self.rows.label(target, &self.actions)?;
         let text_system = window.text_system();
         let mut line_wrapper = text_system.line_wrapper(
             window.text_style().font(),

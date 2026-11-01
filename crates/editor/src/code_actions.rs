@@ -147,16 +147,8 @@ impl Editor {
                     task_context.unwrap_or_default(),
                 );
 
-                // Opened at the cursor in a code buffer, also list the editor's own
-                // refactoring and navigation commands.
-                let commands = if deployed_from.is_none()
-                    && editor.project.is_some()
-                    && buffer.read(cx).language().is_some()
-                {
-                    CodeActionsMenuCommand::defaults()
-                } else {
-                    Vec::new()
-                };
+                // NOTTEROX: also list editor commands, and search the menu by typing.
+                let commands = editor.code_actions_menu_commands(&buffer, &deployed_from, cx);
 
                 // Don't show the menu if there are no actions available
                 if actions.is_empty() && commands.is_empty() {
@@ -164,17 +156,17 @@ impl Editor {
                     return Task::ready(Ok(()));
                 }
 
-                let mut menu = CodeActionsMenu::new(actions, commands, buffer, deployed_from);
-                let editor_handle = cx.weak_entity();
-                menu._keystroke_interceptor =
-                    Some(cx.intercept_keystrokes(move |event, window, cx| {
-                        editor_handle
-                            .update(cx, |editor, cx| {
-                                editor.search_code_actions_menu(&event.keystroke, window, cx)
-                            })
-                            .ok();
+                let rows = CodeActionsMenuRows::new(&actions, commands);
+                *editor.context_menu.borrow_mut() =
+                    Some(CodeContextMenu::CodeActions(CodeActionsMenu {
+                        buffer,
+                        actions,
+                        selected_item: rows.first(false).unwrap_or_default(),
+                        scroll_handle: UniformListScrollHandle::default(),
+                        deployed_from,
+                        rows,
+                        _search: Some(editor.code_actions_menu_search(cx)),
                     }));
-                *editor.context_menu.borrow_mut() = Some(CodeContextMenu::CodeActions(menu));
                 cx.notify();
                 if spawn_straight_away
                     && let Some(task) = editor.confirm_code_action(
@@ -217,16 +209,16 @@ impl Editor {
                 return None;
             };
 
-        let target = match action.item_ix {
-            Some(ix) => CodeActionsMenuTarget::Action(ix),
-            None => actions_menu.selected_target()?,
-        };
-        let action_ix = match target {
-            CodeActionsMenuTarget::Action(ix) => ix,
-            CodeActionsMenuTarget::Command(ix) => {
-                window.dispatch_action(actions_menu.command_action(ix)?, cx);
-                return Some(Task::ready(Ok(())));
-            }
+        // NOTTEROX: `item_ix` is an action index; the selected row can be an editor command.
+        let action_ix = match action.item_ix {
+            Some(ix) => ix,
+            None => match actions_menu.rows.target(actions_menu.selected_item)? {
+                CodeActionsMenuTarget::Action(ix) => ix,
+                CodeActionsMenuTarget::Command(ix) => {
+                    window.dispatch_action(actions_menu.rows.command_action(ix)?, cx);
+                    return Some(Task::ready(Ok(())));
+                }
+            },
         };
         let action = actions_menu.actions.get(action_ix)?;
         let title = action.label();
@@ -316,27 +308,6 @@ impl Editor {
                 });
                 Some(Task::ready(Ok(())))
             }
-        }
-    }
-
-    /// Runs before key bindings while the code actions menu is open: printable keystrokes and
-    /// backspace edit the menu's search query instead of reaching the editor or vim.
-    fn search_code_actions_menu(
-        &mut self,
-        keystroke: &gpui::Keystroke,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.focus_handle.is_focused(window) {
-            return;
-        }
-        let handled = match self.context_menu.borrow_mut().as_mut() {
-            Some(CodeContextMenu::CodeActions(menu)) => menu.handle_search_keystroke(keystroke),
-            _ => false,
-        };
-        if handled {
-            cx.stop_propagation();
-            cx.notify();
         }
     }
 

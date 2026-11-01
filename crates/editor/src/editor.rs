@@ -64,6 +64,8 @@ pub mod test;
 
 mod clipboard;
 mod code_actions;
+// NOTTEROX: code actions menu rows (groups, editor commands, search).
+mod code_actions_menu_rows;
 mod columnar_selection;
 mod completions;
 mod config;
@@ -142,10 +144,10 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use blink_manager::BlinkManager;
 use client::{Collaborator, ParticipantIndex, parse_zed_link};
 use clock::ReplicaId;
+use code_actions_menu_rows::{CodeActionsMenuRows, CodeActionsMenuTarget};
 use code_context_menus::{
-    AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu,
-    CodeActionsMenuCommand, CodeActionsMenuTarget, CodeContextMenu, CompletionsMenu,
-    ContextMenuOrigin,
+    AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu, CodeContextMenu,
+    CompletionsMenu, ContextMenuOrigin,
 };
 use code_lens::CodeLensState;
 use collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -175,8 +177,8 @@ use gpui::{
     KeyContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, ParentElement,
     Pixels, PressureStage, Render, ScrollHandle, SharedString, SharedUri, Size, Stateful, Styled,
     Subscription, Task, TextRun, TextStyle, TextStyleRefinement, UTF16Selection, UnderlineStyle,
-    WeakEntity, WeakFocusHandle, Window, div, point, prelude::*, pulsating_between, px, relative,
-    size,
+    UniformListScrollHandle, WeakEntity, WeakFocusHandle, Window, div, point, prelude::*,
+    pulsating_between, px, relative, size,
 };
 use hover_links::{HoverLink, HoveredLinkState, find_file};
 use hover_popover::{HoverState, hide_hover};
