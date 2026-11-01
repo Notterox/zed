@@ -1,0 +1,2 @@
+# NOTTEROX: shell scripts must keep LF endings even with core.autocrlf.
+notterox-install text eol=lf
