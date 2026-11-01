@@ -143,8 +143,9 @@ use blink_manager::BlinkManager;
 use client::{Collaborator, ParticipantIndex, parse_zed_link};
 use clock::ReplicaId;
 use code_context_menus::{
-    AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu, CodeContextMenu,
-    CompletionsMenu, ContextMenuOrigin,
+    AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu,
+    CodeActionsMenuCommand, CodeActionsMenuTarget, CodeContextMenu, CompletionsMenu,
+    ContextMenuOrigin,
 };
 use code_lens::CodeLensState;
 use collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -174,8 +175,8 @@ use gpui::{
     KeyContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, ParentElement,
     Pixels, PressureStage, Render, ScrollHandle, SharedString, SharedUri, Size, Stateful, Styled,
     Subscription, Task, TextRun, TextStyle, TextStyleRefinement, UTF16Selection, UnderlineStyle,
-    UniformListScrollHandle, WeakEntity, WeakFocusHandle, Window, div, point, prelude::*,
-    pulsating_between, px, relative, size,
+    WeakEntity, WeakFocusHandle, Window, div, point, prelude::*, pulsating_between, px, relative,
+    size,
 };
 use hover_links::{HoverLink, HoveredLinkState, find_file};
 use hover_popover::{HoverState, hide_hover};

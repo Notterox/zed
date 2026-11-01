@@ -5552,6 +5552,7 @@ dependencies = [
  "futures 0.3.34",
  "futures-lite 2.6.1",
  "fuzzy",
+ "fuzzy_nucleo",
  "git",
  "gpui",
  "indoc",

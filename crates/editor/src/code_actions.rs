@@ -147,20 +147,34 @@ impl Editor {
                     task_context.unwrap_or_default(),
                 );
 
+                // Opened at the cursor in a code buffer, also list the editor's own
+                // refactoring and navigation commands.
+                let commands = if deployed_from.is_none()
+                    && editor.project.is_some()
+                    && buffer.read(cx).language().is_some()
+                {
+                    CodeActionsMenuCommand::defaults()
+                } else {
+                    Vec::new()
+                };
+
                 // Don't show the menu if there are no actions available
-                if actions.is_empty() {
+                if actions.is_empty() && commands.is_empty() {
                     cx.notify();
                     return Task::ready(Ok(()));
                 }
 
-                *editor.context_menu.borrow_mut() =
-                    Some(CodeContextMenu::CodeActions(CodeActionsMenu {
-                        buffer,
-                        actions,
-                        selected_item: Default::default(),
-                        scroll_handle: UniformListScrollHandle::default(),
-                        deployed_from,
+                let mut menu = CodeActionsMenu::new(actions, commands, buffer, deployed_from);
+                let editor_handle = cx.weak_entity();
+                menu._keystroke_interceptor =
+                    Some(cx.intercept_keystrokes(move |event, window, cx| {
+                        editor_handle
+                            .update(cx, |editor, cx| {
+                                editor.search_code_actions_menu(&event.keystroke, window, cx)
+                            })
+                            .ok();
                     }));
+                *editor.context_menu.borrow_mut() = Some(CodeContextMenu::CodeActions(menu));
                 cx.notify();
                 if spawn_straight_away
                     && let Some(task) = editor.confirm_code_action(
@@ -203,7 +217,17 @@ impl Editor {
                 return None;
             };
 
-        let action_ix = action.item_ix.unwrap_or(actions_menu.selected_item);
+        let target = match action.item_ix {
+            Some(ix) => CodeActionsMenuTarget::Action(ix),
+            None => actions_menu.selected_target()?,
+        };
+        let action_ix = match target {
+            CodeActionsMenuTarget::Action(ix) => ix,
+            CodeActionsMenuTarget::Command(ix) => {
+                window.dispatch_action(actions_menu.command_action(ix)?, cx);
+                return Some(Task::ready(Ok(())));
+            }
+        };
         let action = actions_menu.actions.get(action_ix)?;
         let title = action.label();
         let runnable_task_key =
@@ -292,6 +316,27 @@ impl Editor {
                 });
                 Some(Task::ready(Ok(())))
             }
+        }
+    }
+
+    /// Runs before key bindings while the code actions menu is open: printable keystrokes and
+    /// backspace edit the menu's search query instead of reaching the editor or vim.
+    fn search_code_actions_menu(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus_handle.is_focused(window) {
+            return;
+        }
+        let handled = match self.context_menu.borrow_mut().as_mut() {
+            Some(CodeContextMenu::CodeActions(menu)) => menu.handle_search_keystroke(keystroke),
+            _ => false,
+        };
+        if handled {
+            cx.stop_propagation();
+            cx.notify();
         }
     }
 

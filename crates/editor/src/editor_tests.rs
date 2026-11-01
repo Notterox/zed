@@ -50737,3 +50737,89 @@ async fn test_soft_wrap_indent_updated_on_file_move_between_directories(
         .unwrap();
     assert_eq!(snapshot.soft_wrap_indent(DisplayRow(0)), Some(0));
 }
+
+#[gpui::test]
+async fn test_code_actions_menu_groups_and_search(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorLspTestContext::new_rust(
+        lsp::ServerCapabilities {
+            code_action_provider: Some(lsp::CodeActionProviderCapability::Simple(true)),
+            ..Default::default()
+        },
+        cx,
+    )
+    .await;
+    cx.set_state("fn mainˇ() {}");
+    let mut code_action_requests = cx.set_request_handler::<lsp::request::CodeActionRequest, _, _>(
+        move |_, _, _| async move {
+            let action = |title: &str, kind| {
+                lsp::CodeActionOrCommand::CodeAction(lsp::CodeAction {
+                    title: title.to_string(),
+                    kind: Some(kind),
+                    ..Default::default()
+                })
+            };
+            Ok(Some(vec![
+                action(
+                    "Extract into function",
+                    lsp::CodeActionKind::REFACTOR_EXTRACT,
+                ),
+                action("Remove unused variable", lsp::CodeActionKind::QUICKFIX),
+                action("Inline variable", lsp::CodeActionKind::REFACTOR_INLINE),
+            ]))
+        },
+    );
+    cx.update_editor(|editor, window, cx| {
+        editor.toggle_code_actions(
+            &ToggleCodeActions {
+                deployed_from: None,
+                quick_launch: false,
+            },
+            window,
+            cx,
+        );
+    });
+    code_action_requests.next().await;
+    cx.run_until_parked();
+    cx.condition(|editor, _| editor.context_menu_visible())
+        .await;
+
+    let menu_rows = |cx: &mut EditorLspTestContext| {
+        cx.update_editor(|editor, _, _| match editor.context_menu.borrow().as_ref() {
+            Some(CodeContextMenu::CodeActions(menu)) => menu.row_labels(),
+            _ => panic!("Expected the code actions menu"),
+        })
+    };
+    assert_eq!(
+        menu_rows(&mut cx),
+        [
+            "# Quick Fixes",
+            "> Remove unused variable",
+            "# Refactor",
+            "Rename…",
+            "# Extract",
+            "Extract into function",
+            "# Inline",
+            "Inline variable",
+            "# Source",
+            "Organize Imports",
+            "Format Document",
+            "# Navigate",
+            "Find All References",
+            "Go to Implementation",
+            "Go to Type Definition",
+            "Show Incoming Calls",
+        ]
+    );
+
+    // Typing filters the menu instead of editing the buffer.
+    cx.simulate_keystrokes("e x t");
+    cx.run_until_parked();
+    assert_eq!(menu_rows(&mut cx), ["> Extract into function"]);
+    cx.assert_editor_state("fn mainˇ() {}");
+
+    cx.simulate_keystrokes("backspace backspace backspace");
+    cx.run_until_parked();
+    assert_eq!(menu_rows(&mut cx).len(), 16);
+    cx.assert_editor_state("fn mainˇ() {}");
+}

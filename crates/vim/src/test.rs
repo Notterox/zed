@@ -3438,3 +3438,29 @@ async fn test_project_search_opens_in_normal_mode(cx: &mut gpui::TestAppContext)
         assert_eq!(vim_mode, Some(Mode::Normal));
     });
 }
+
+#[gpui::test]
+async fn test_code_actions_menu_search_in_normal_mode(cx: &mut gpui::TestAppContext) {
+    let mut cx = VimTestContext::new(cx, true).await;
+    cx.set_state("ˇfn main() {}", Mode::Normal);
+    cx.update_editor(|editor, window, cx| {
+        editor.toggle_code_actions(
+            &editor::actions::ToggleCodeActions {
+                deployed_from: None,
+                quick_launch: false,
+            },
+            window,
+            cx,
+        );
+    });
+    // Let the code actions fetch's debounce run out.
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.update_editor(|editor, _, _| editor.context_menu_visible()));
+
+    // Normal-mode commands typed while the menu is open search the menu instead.
+    cx.simulate_keystrokes("d d x");
+    cx.run_until_parked();
+    cx.assert_state("ˇfn main() {}", Mode::Normal);
+    assert!(cx.update_editor(|editor, _, _| editor.context_menu_visible()));
+}
