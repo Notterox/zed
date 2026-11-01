@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# NOTTEROX: build this fork in release mode and install it with the official Windows layout:
+#
+#   <dest>/Zed.exe            the editor
+#   <dest>/bin/zed.exe        the CLI (finds ../Zed.exe, forwards to a running instance)
+#   <dest>/conpty.dll, <dest>/amd_ags_x64.dll, <dest>/x64/OpenConsole.exe
+#                             third-party binaries the official installer downloads; copied
+#                             from a stock Zed install of the same version when present
+#
+# Installing to a separate folder keeps the running editor from locking target/release.
+#
+# Usage (Git Bash): script/notterox-install [dest]
+#   dest            install folder (default $ZED_FORK_DIR, else C:/Home/Soft/ZedFork)
+#   ZED_STOCK_DIR   stock Zed install to copy the DLLs from (default: Scoop's zed/current)
+
+set -euo pipefail
+
+dest="${1:-${ZED_FORK_DIR:-/c/Home/Soft/ZedFork}}"
+stock="${ZED_STOCK_DIR:-/c/Home/Soft/Scoop/apps/zed/current}"
+cmake_bin="/c/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+
+cd "$(dirname "$0")/.."
+[ -d "$cmake_bin" ] && export PATH="$cmake_bin:$PATH"
+# RUSTFLAGS would override .cargo/config.toml (see docs/src/development/windows.md).
+unset RUSTFLAGS
+
+cargo build --release --package zed --package cli
+
+mkdir -p "$dest/bin" "$dest/x64"
+if ! cp target/release/zed.exe "$dest/Zed.exe"; then
+    echo "error: could not replace $dest/Zed.exe; close the Zed running from there and retry" >&2
+    exit 1
+fi
+cp target/release/cli.exe "$dest/bin/zed.exe"
+for file in conpty.dll amd_ags_x64.dll x64/OpenConsole.exe; do
+    if [ -f "$stock/$file" ]; then
+        cp "$stock/$file" "$dest/$file"
+    else
+        echo "warning: $stock/$file not found; the terminal may fall back to the system ConPTY" >&2
+    fi
+done
+git describe --tags --always --dirty > "$dest/VERSION"
+
+echo "Installed $(cat "$dest/VERSION") to $dest"
