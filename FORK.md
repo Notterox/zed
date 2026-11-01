@@ -61,7 +61,8 @@ Close the Zed running from the install folder first; Windows locks `Zed.exe` whi
 
 The installed layout matches the official one: `Zed.exe` plus the CLI as `bin/zed.exe`.
 `C:\Home\Soft\ZedFork\bin` is on the user `PATH` (this is the only Zed installed), so `zed`
-in a terminal and the Unity package's discovery both find the fork.
+in a terminal and the Unity package's discovery both find the fork. The script also writes a
+per-user Start menu shortcut, `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Zed.lnk`.
 
 The official installer also ships `conpty.dll`, `amd_ags_x64.dll` and `x64/OpenConsole.exe`
 (Microsoft and AMD binaries it downloads at bundle time). The script keeps the copies already

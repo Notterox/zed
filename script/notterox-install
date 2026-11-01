@@ -44,4 +44,16 @@ for file in conpty.dll amd_ags_x64.dll x64/OpenConsole.exe arm64/OpenConsole.exe
 done
 git describe --tags --always --dirty > "$dest/VERSION"
 
+# Start menu entry (per user), pointing at the installed editor.
+zed_exe="$(cygpath -w "$dest/Zed.exe")"
+powershell.exe -NoProfile -Command "
+    \$lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Zed.lnk'
+    \$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut(\$lnk)
+    \$shortcut.TargetPath = '$zed_exe'
+    \$shortcut.WorkingDirectory = '$(cygpath -w "$dest")'
+    \$shortcut.IconLocation = '$zed_exe,0'
+    \$shortcut.Description = 'Zed (Notterox fork)'
+    \$shortcut.Save()
+"
+
 echo "Installed $(cat "$dest/VERSION") to $dest"
