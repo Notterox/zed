@@ -57,8 +57,17 @@ CMake; the script uses the CMake bundled with Visual Studio 2026).
 script/notterox-install            # release build, installs to C:/Home/Soft/ZedFork
 ```
 
+Close the Zed running from the install folder first; Windows locks `Zed.exe` while it runs.
+
 The installed layout matches the official one: `Zed.exe` plus the CLI as `bin/zed.exe`.
-Launch Zed from there, and point Unity's external editor at `bin/zed.exe`. Development builds:
+`C:\Home\Soft\ZedFork\bin` is on the user `PATH` (this is the only Zed installed), so `zed`
+in a terminal and the Unity package's discovery both find the fork.
+
+The official installer also ships `conpty.dll`, `amd_ags_x64.dll` and `x64/OpenConsole.exe`
+(Microsoft and AMD binaries it downloads at bundle time). The script keeps the copies already
+in the install folder; for a fresh folder, unpack them from an official installer of the same
+version, e.g. with Scoop's `innounp -x -d<dir> Zed-x86_64.exe`, or set `ZED_STOCK_DIR` to an
+official install. Without them the terminal falls back to the system ConPTY. Development builds:
 `cargo build -p zed` (`target/debug/zed.exe`, slow at runtime). First builds take ~14 min
 (debug) and ~21 min (release).
 
