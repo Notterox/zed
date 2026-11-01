@@ -147,19 +147,25 @@ impl Editor {
                     task_context.unwrap_or_default(),
                 );
 
+                // NOTTEROX: also list editor commands, and search the menu by typing.
+                let commands = editor.code_actions_menu_commands(&buffer, &deployed_from, cx);
+
                 // Don't show the menu if there are no actions available
-                if actions.is_empty() {
+                if actions.is_empty() && commands.is_empty() {
                     cx.notify();
                     return Task::ready(Ok(()));
                 }
 
+                let rows = CodeActionsMenuRows::new(&actions, commands);
                 *editor.context_menu.borrow_mut() =
                     Some(CodeContextMenu::CodeActions(CodeActionsMenu {
                         buffer,
                         actions,
-                        selected_item: Default::default(),
+                        selected_item: rows.first(false).unwrap_or_default(),
                         scroll_handle: UniformListScrollHandle::default(),
                         deployed_from,
+                        rows,
+                        _search: Some(editor.code_actions_menu_search(cx)),
                     }));
                 cx.notify();
                 if spawn_straight_away
@@ -203,7 +209,17 @@ impl Editor {
                 return None;
             };
 
-        let action_ix = action.item_ix.unwrap_or(actions_menu.selected_item);
+        // NOTTEROX: `item_ix` is an action index; the selected row can be an editor command.
+        let action_ix = match action.item_ix {
+            Some(ix) => ix,
+            None => match actions_menu.rows.target(actions_menu.selected_item)? {
+                CodeActionsMenuTarget::Action(ix) => ix,
+                CodeActionsMenuTarget::Command(ix) => {
+                    window.dispatch_action(actions_menu.rows.command_action(ix)?, cx);
+                    return Some(Task::ready(Ok(())));
+                }
+            },
+        };
         let action = actions_menu.actions.get(action_ix)?;
         let title = action.label();
         let runnable_task_key =

@@ -64,6 +64,8 @@ pub mod test;
 
 mod clipboard;
 mod code_actions;
+// NOTTEROX: code actions menu rows (groups, editor commands, search).
+mod code_actions_menu_rows;
 mod columnar_selection;
 mod completions;
 mod config;
@@ -142,6 +144,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use blink_manager::BlinkManager;
 use client::{Collaborator, ParticipantIndex, parse_zed_link};
 use clock::ReplicaId;
+use code_actions_menu_rows::{CodeActionsMenuRows, CodeActionsMenuTarget};
 use code_context_menus::{
     AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu, CodeContextMenu,
     CompletionsMenu, ContextMenuOrigin,

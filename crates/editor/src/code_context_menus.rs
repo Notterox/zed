@@ -34,12 +34,19 @@ use ui::{
 };
 use util::ResultExt;
 
+use crate::CodeActionsMenuRows; // NOTTEROX
 use crate::hover_popover::{hover_markdown_style, open_markdown_url};
 use crate::{
-    CodeActionProvider, CompletionId, CompletionProvider, DisplayRow, Editor, EditorStyle,
+    CodeActionProvider,
+    CompletionId,
+    CompletionProvider,
+    DisplayRow,
+    Editor,
+    EditorStyle,
     ResolvedTasks,
-    actions::{ConfirmCodeAction, ConfirmCompletion},
-    split_words, styled_runs_for_code_label,
+    actions::ConfirmCompletion, // NOTTEROX: ConfirmCodeAction moved to code_actions_menu_rows.rs
+    split_words,
+    styled_runs_for_code_label,
 };
 use crate::{CodeActionSource, EditorSettings};
 use collections::{HashSet, VecDeque};
@@ -1885,7 +1892,8 @@ impl CodeActionContents {
         self.len() == 0
     }
 
-    fn iter(&self) -> impl Iterator<Item = CodeActionsItem> + '_ {
+    // NOTTEROX: pub(crate) for code_actions_menu_rows.rs.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = CodeActionsItem> + '_ {
         self.tasks
             .iter()
             .flat_map(|tasks| {
@@ -1968,71 +1976,40 @@ pub struct CodeActionsMenu {
     pub selected_item: usize,
     pub scroll_handle: UniformListScrollHandle,
     pub deployed_from: Option<CodeActionSource>,
+    // NOTTEROX: grouped, searchable rows; `selected_item` indexes them, headers included.
+    pub(crate) rows: CodeActionsMenuRows,
+    pub(crate) _search: Option<gpui::Subscription>,
 }
 
 impl CodeActionsMenu {
+    // NOTTEROX: selection moves over the rows, skipping group headers.
     fn select_first(&mut self, cx: &mut Context<Editor>) {
-        self.selected_item = if self.scroll_handle.y_flipped() {
-            self.actions.len() - 1
-        } else {
-            0
-        };
-        self.scroll_handle
-            .scroll_to_item(self.selected_item, ScrollStrategy::Top);
-        cx.notify()
+        let ix = self.rows.first(self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_last(&mut self, cx: &mut Context<Editor>) {
-        self.selected_item = if self.scroll_handle.y_flipped() {
-            0
-        } else {
-            self.actions.len() - 1
-        };
-        self.scroll_handle
-            .scroll_to_item(self.selected_item, ScrollStrategy::Top);
-        cx.notify()
+        let ix = self.rows.first(!self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_prev(&mut self, cx: &mut Context<Editor>) {
-        self.selected_item = if self.scroll_handle.y_flipped() {
-            self.next_match_index()
-        } else {
-            self.prev_match_index()
-        };
-        self.scroll_handle
-            .scroll_to_item(self.selected_item, ScrollStrategy::Top);
-        cx.notify();
+        let ix = self
+            .rows
+            .step(self.selected_item, self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     fn select_next(&mut self, cx: &mut Context<Editor>) {
-        self.selected_item = if self.scroll_handle.y_flipped() {
-            self.prev_match_index()
-        } else {
-            self.next_match_index()
-        };
-        self.scroll_handle
-            .scroll_to_item(self.selected_item, ScrollStrategy::Top);
-        cx.notify();
-    }
-
-    fn prev_match_index(&self) -> usize {
-        if self.selected_item > 0 {
-            self.selected_item - 1
-        } else {
-            self.actions.len() - 1
-        }
-    }
-
-    fn next_match_index(&self) -> usize {
-        if self.selected_item + 1 < self.actions.len() {
-            self.selected_item + 1
-        } else {
-            0
-        }
+        let ix = self
+            .rows
+            .step(self.selected_item, !self.scroll_handle.y_flipped());
+        self.select_row(ix, cx);
     }
 
     pub fn visible(&self) -> bool {
-        !self.actions.is_empty()
+        // NOTTEROX: editor command rows count too.
+        self.rows.has_targets()
     }
 
     fn origin(&self) -> ContextMenuOrigin {
@@ -2052,50 +2029,21 @@ impl CodeActionsMenu {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) -> AnyElement {
-        let actions = self.actions.clone();
+        // NOTTEROX: render the grouped, searchable rows (code_actions_menu_rows.rs).
+        let rows = self.rows.rows();
         let selected_item = self.selected_item;
         let is_quick_action_bar = matches!(self.origin(), ContextMenuOrigin::QuickActionBar);
 
         let list = uniform_list(
             "code_actions_menu",
-            self.actions.len(),
+            self.rows.len(),
             cx.processor(move |_this, range: Range<usize>, _, cx| {
-                actions
+                let start_ix = range.start;
+                rows[range]
                     .iter()
-                    .skip(range.start)
-                    .take(range.end - range.start)
                     .enumerate()
-                    .map(|(ix, action)| {
-                        let item_ix = range.start + ix;
-                        let selected = item_ix == selected_item;
-                        let colors = cx.theme().colors();
-
-                        ListItem::new(item_ix)
-                            .inset(true)
-                            .toggle_state(selected)
-                            .overflow_x()
-                            .child(
-                                div()
-                                    .min_w(CODE_ACTION_MENU_MIN_WIDTH)
-                                    .max_w(CODE_ACTION_MENU_MAX_WIDTH)
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .when(is_quick_action_bar, |this| this.text_ui(cx))
-                                    .when(selected, |this| this.text_color(colors.text_accent))
-                                    .child(action.menu_label()),
-                            )
-                            .on_click(cx.listener(move |editor, _, window, cx| {
-                                cx.stop_propagation();
-                                if let Some(task) = editor.confirm_code_action(
-                                    &ConfirmCodeAction {
-                                        item_ix: Some(item_ix),
-                                    },
-                                    window,
-                                    cx,
-                                ) {
-                                    task.detach_and_log_err(cx)
-                                }
-                            }))
+                    .map(|(ix, row)| {
+                        row.render(start_ix + ix, selected_item, is_quick_action_bar, cx)
                     })
                     .collect()
             }),
@@ -2103,24 +2051,12 @@ impl CodeActionsMenu {
         .occlude()
         .max_h(max_height_in_lines as f32 * window.line_height())
         .track_scroll(&self.scroll_handle)
-        .with_width_from_item(
-            self.actions
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, action)| match action {
-                    CodeActionsItem::Task(_, task) => task.resolved_label.chars().count(),
-                    CodeActionsItem::CodeAction { action, .. } => {
-                        action.lsp_action.title().chars().count()
-                    }
-                    CodeActionsItem::DebugScenario(scenario) => {
-                        format!("debug: {}", scenario.label).chars().count()
-                    }
-                })
-                .map(|(ix, _)| ix),
-        )
+        .with_width_from_item(self.rows.widest_row())
         .with_sizing_behavior(ListSizingBehavior::Infer);
 
-        Popover::new().child(list).into_any_element()
+        Popover::new()
+            .child(v_flex().children(self.rows.render_status()).child(list))
+            .into_any_element()
     }
 
     fn render_aside(
@@ -2129,11 +2065,9 @@ impl CodeActionsMenu {
         window: &mut Window,
         _cx: &mut Context<Editor>,
     ) -> Option<AnyElement> {
-        let Some(action) = self.actions.get(self.selected_item) else {
-            return None;
-        };
-
-        let label = action.menu_label();
+        // NOTTEROX: the selected row can be an editor command.
+        let target = self.rows.target(self.selected_item)?;
+        let label = self.rows.label(target, &self.actions)?;
         let text_system = window.text_system();
         let mut line_wrapper = text_system.line_wrapper(
             window.text_style().font(),
